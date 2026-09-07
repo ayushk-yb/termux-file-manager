@@ -3,18 +3,24 @@
 A web-based file manager that runs directly in **native Termux on Android**, with
 **zero dependencies outside the Python standard library**.
 
-Built for managing the storage shared by Transmission, aria2 and Jellyfin on an
-always-on Android home server — browse, upload, download, rename, move, copy,
-delete, search, preview and ZIP, from any browser on your LAN.
+Turn any Android phone into a file server you manage from a browser: browse,
+upload, download, rename, move, copy, delete, search, preview and ZIP — from
+your laptop, on your own Wi-Fi.
 
-```
-git clone <this repo>
-cd FileManagerService
+It was built to organise the storage shared by Transmission, aria2 and Jellyfin
+on an always-on phone, but it needs none of them: point it at a folder and it
+manages that folder.
+
+```bash
+pkg install python git termux-services
+termux-setup-storage
+git clone https://github.com/ayushk-yb/termux-file-manager.git
+cd termux-file-manager
 ./scripts/install-termux.sh
 sv up filemanager
 ```
 
-Then open `http://<your-phone-lan-ip>:8080`.
+Then open `http://<phone-lan-ip>:8080` from any computer on the same Wi-Fi.
 
 ---
 
@@ -116,38 +122,123 @@ extraction, any Jellyfin API integration.
 
 ---
 
-## Requirements
+## Quick start — any Android phone
 
-- Native Termux (F-Droid or Google Play build) — **not** proot-distro, not
-  Andronix, not a Debian/Ubuntu container
-- `python` ≥ 3.9 and `termux-services`
-- Storage permission (`termux-setup-storage`)
-- No root
+Works on any Android phone that can run Termux: arm64, arm32, or x86_64, rooted
+or not. Nothing is compiled, so there is no architecture-specific build step.
+
+### 1. Install Termux
+
+Get it from **[F-Droid](https://f-droid.org/packages/com.termux/)** (recommended,
+most up to date) or the **Google Play Store**. Both work.
+
+> **Do not** use the abandoned Termux build on some third-party app stores, and
+> **do not** use proot-distro / Andronix / a Debian container — TermuxFM is
+> built for native Termux and the installer will refuse to run elsewhere.
+
+Open Termux once and let it finish its first-run setup.
+
+### 2. Install the packages
 
 ```bash
-pkg install python termux-services
+pkg update
+pkg install python git termux-services
 ```
 
-After installing `termux-services` for the first time, **restart Termux** so the
-`runsvdir` supervisor starts.
+Then **close and reopen Termux**, so the `termux-services` supervisor starts.
 
----
-
-## Install
+### 3. Grant storage access
 
 ```bash
-git clone <this repo>
-cd FileManagerService
+termux-setup-storage
+```
+
+Tap **Allow** on the Android permission dialog. This creates
+`~/storage/shared`, which is your phone's internal storage
+(`/storage/emulated/0`) — where your Downloads, Movies and DCIM folders live.
+
+### 4. Install TermuxFM
+
+```bash
+git clone https://github.com/ayushk-yb/termux-file-manager.git
+cd termux-file-manager
 ./scripts/install-termux.sh
 ```
 
-The installer refuses to do anything surprising: it installs no packages,
-requires no root, checks that `$PREFIX` really is native Termux, verifies the
-Python version *and* the stdlib modules it needs, warns if port 8080 is taken,
-creates the `Server/` tree only if it is missing (never touching existing
-files), prompts for a username and password, and writes the service.
+The installer checks the environment, copies the code, creates the `Server/`
+folder tree, and prompts you for a **username and password** for the web
+interface. It installs no packages, needs no root, and compiles nothing.
 
-Options:
+### 5. Start it
+
+```bash
+sv up filemanager
+sv status filemanager
+```
+
+`run: filemanager: (pid 1234) 5s` means it is up.
+
+### 6. Open it from your computer
+
+Find your phone's LAN address — the installer prints it, or:
+
+```bash
+ifconfig wlan0 | grep 'inet '
+```
+
+Then browse to that address on port 8080, from any computer, tablet or phone on
+the same Wi-Fi:
+
+```
+http://192.168.1.42:8080
+```
+
+Log in with the username and password you chose in step 4. That's it.
+
+> **Tip:** give the phone a static DHCP lease (or a DHCP reservation) in your
+> router so the address does not change after a reboot.
+
+### 7. Keep it running after a reboot
+
+Three things are needed for a phone to behave like a server. The first is
+automatic:
+
+**a. Start the service on boot.** Install the **Termux:Boot** app — from the
+**same source as Termux** (F-Droid addons only work with F-Droid Termux, Play
+addons with Play Termux) — and open it once so Android grants it permission.
+Then:
+
+```bash
+./scripts/install-termux.sh --setup-boot
+```
+
+That creates `~/.termux/boot/start-server.sh` if you do not have one, or appends
+a single `sv up filemanager` line if you do (your existing script is backed up
+and nothing else in it is touched). You can also do it by hand — see
+[Start on boot, by hand](#start-on-boot-by-hand).
+
+**b. Exempt Termux from battery optimisation.** Android will otherwise freeze it
+after a while. In Android settings, find Termux under Apps → Battery and set it
+to **Unrestricted** (the exact wording varies by manufacturer; on Samsung it is
+also worth adding Termux to "Never sleeping apps").
+
+**c. Keep a wake lock.** `termux-wake-lock` (already in the generated boot
+script) stops the CPU sleeping with the screen off. You can also tap **Acquire
+wakelock** in Termux's notification.
+
+Reboot the phone to confirm everything comes back on its own.
+
+---
+
+## Requirements
+
+- Native Termux — **not** proot-distro, Andronix, or a Debian/Ubuntu container
+- `python` ≥ 3.9, `git`, `termux-services`
+- Storage permission (`termux-setup-storage`)
+- No root, no Docker, no compilation
+- Any CPU architecture
+
+## Install options
 
 ```bash
 ./scripts/install-termux.sh --port 8081 --root ~/storage/shared/Media
@@ -159,39 +250,54 @@ Options:
 | `--port PORT` | `8080` |
 | `--host ADDR` | `0.0.0.0` (reachable on the LAN) |
 | `--config PATH` | `~/.config/termuxfm/config.json` |
+| `--setup-boot` | create/update the Termux:Boot script (safe, idempotent) |
 | `--force-setup` | re-prompt for credentials even if a config exists |
 
-### Start it
+Re-running the installer is safe: it upgrades the code in place, keeps your
+config, and never touches files under the server root.
 
-```bash
-sv up filemanager
-sv status filemanager
-```
+### Choosing a port
 
-Open `http://<your-phone-lan-ip>:8080` from your computer. The installer prints
-the detected IP; `ifconfig wlan0` shows it too.
+Port 8080 is the default. If you already run other services on the phone, note
+the ports they use so they do not collide — a typical media-server phone has:
 
-Port 8080 was chosen to avoid your existing services: `8022` SSH, `6800` aria2
-RPC, `6880` AriaNg, `8096` Jellyfin, `9091` Transmission.
+| Service | Port |
+| --- | --- |
+| SSH / SFTP (`sshd`) | 8022 |
+| aria2 RPC | 6800 |
+| AriaNg | 6880 |
+| Jellyfin | 8096 |
+| Transmission | 9091 |
+| **TermuxFM** | **8080** |
 
-### Start it automatically after reboot
+### Start on boot, by hand
 
-Add one line to `~/.termux/boot/start-server.sh`, alongside your existing
-`sv up` lines:
-
-```sh
-sv up filemanager
-```
-
-For reference, the complete boot script then looks like:
+If you would rather not use `--setup-boot`, create
+`~/.termux/boot/start-server.sh` yourself:
 
 ```sh
 #!/data/data/com.termux/files/usr/bin/bash
 
+# Keep the CPU awake so services are not suspended with the screen off.
 termux-wake-lock
+
+# Give Android a moment to bring up Wi-Fi before services bind to it.
 sleep 10
+
+# Start the termux-services supervisor.
 source "$PREFIX/etc/profile.d/start-services.sh"
 
+sv up filemanager
+```
+
+```bash
+chmod 700 ~/.termux/boot/start-server.sh
+```
+
+If you already have this file because you run other services, just add the
+`sv up filemanager` line next to the others:
+
+```sh
 sv up sshd
 sv up transmission
 sv up aria2
@@ -199,9 +305,6 @@ sv up jellyfin
 sv up ariang
 sv up filemanager
 ```
-
-Nothing else changes — `termux-wake-lock` and the existing delay already provide
-everything this service needs.
 
 ---
 
@@ -338,10 +441,11 @@ rate limiting. **Do not port-forward this to the internet.** If you need remote
 access, tunnel it over the SSH you already run on 8022:
 
 ```bash
-ssh -p 8022 -L 8080:localhost:8080 u0_a383@<your-phone-lan-ip>
+ssh -p 8022 -L 8080:localhost:8080 <termux-user>@<phone-lan-ip>
 ```
 
-…then browse `http://localhost:8080` on your computer.
+…then browse `http://localhost:8080` on your computer. (`whoami` in Termux
+prints the user name to use, e.g. `u0_a123`.)
 
 ---
 
@@ -353,7 +457,7 @@ status codes, cookies, CSRF, Range requests and chunked framing are all
 exercised the way a browser exercises them.
 
 ```bash
-cd FileManagerService
+cd termux-file-manager
 python3 -m unittest discover tests -v
 ```
 
@@ -463,7 +567,7 @@ Your files under the server root are never touched. Remember to remove
 ## Layout
 
 ```
-FileManagerService/
+termux-file-manager/
 ├── termuxfm/
 │   ├── safepath.py    the sandbox boundary (all path validation)
 │   ├── auth.py        PBKDF2, sessions, CSRF, login throttling
@@ -520,8 +624,14 @@ Wi-Fi, that the host is `0.0.0.0` (not `127.0.0.1`), and that the phone's IP has
 not changed (`ifconfig wlan0`). A static DHCP lease on your router avoids that.
 
 **Stops working after the screen sleeps** — `termux-wake-lock` must be active
-(your boot script already does this), and Termux must be exempt from battery
-optimisation in Android settings.
+(the generated boot script does this), and Termux must be exempt from battery
+optimisation in Android settings: Apps → Termux → Battery → **Unrestricted**.
+
+**Does not come back after a reboot** — check all three: the **Termux:Boot** app
+is installed *from the same source as Termux* and has been opened once,
+`~/.termux/boot/start-server.sh` contains `sv up filemanager` (run
+`./scripts/install-termux.sh --setup-boot`), and Termux is exempt from battery
+optimisation.
 
 **"This filesystem rejected the name"** — Android's shared storage forbids
 `" * : < > ? \ |` and trailing dots or spaces in file names.

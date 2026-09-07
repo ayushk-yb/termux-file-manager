@@ -244,7 +244,70 @@ EOF
   ok "logs will be written to $LOG_DIR/current"
 }
 
-# ── 7. summary ─────────────────────────────────────────────────────────
+# ── 7. boot script ─────────────────────────────────────────────────────
+
+BOOT_DIR="$HOME/.termux/boot"
+BOOT_SCRIPT="$BOOT_DIR/start-server.sh"
+BOOT_LINE="sv up $SERVICE_NAME"
+
+boot_status() {
+  if [ ! -e "$BOOT_SCRIPT" ]; then
+    echo "missing"
+  elif grep -qE "^[[:space:]]*sv up[[:space:]]+$SERVICE_NAME[[:space:]]*$" "$BOOT_SCRIPT"; then
+    echo "present"
+  else
+    echo "needs-line"
+  fi
+}
+
+setup_boot() {
+  step "Setting up start-on-boot"
+  # Not named "status": that is a read-only special in some shells.
+  local boot_state
+  boot_state="$(boot_status)"
+
+  case "$boot_state" in
+    present)
+      ok "$BOOT_SCRIPT already starts $SERVICE_NAME"
+      ;;
+    missing)
+      mkdir -p "$BOOT_DIR"
+      cat > "$BOOT_SCRIPT" <<EOF
+#!$PREFIX/bin/bash
+# Started by the Termux:Boot app after the phone finishes booting.
+
+# Keep the CPU awake so services are not suspended with the screen off.
+termux-wake-lock
+
+# Give Android a moment to bring up Wi-Fi before services bind to it.
+sleep 10
+
+# Start the termux-services supervisor.
+source "\$PREFIX/etc/profile.d/start-services.sh"
+
+$BOOT_LINE
+EOF
+      chmod 700 "$BOOT_SCRIPT"
+      ok "created $BOOT_SCRIPT"
+      ;;
+    needs-line)
+      # Never rewrite a script that may already start other services: keep a
+      # backup and append a single line.
+      cp "$BOOT_SCRIPT" "$BOOT_SCRIPT.bak-$(date +%Y%m%d%H%M%S)"
+      printf '\n%s\n' "$BOOT_LINE" >> "$BOOT_SCRIPT"
+      chmod 700 "$BOOT_SCRIPT"
+      ok "appended '$BOOT_LINE' to $BOOT_SCRIPT (backup kept alongside)"
+      ;;
+  esac
+
+  if [ ! -d "/data/data/com.termux.boot" ]; then
+    warn "The Termux:Boot app does not appear to be installed."
+    warn "Install it from the SAME source as Termux (F-Droid or Play Store),"
+    warn "open it once, then reboot to test."
+  fi
+}
+
+# ── 8. summary ─────────────────────────────────────────────────────────
 
 lan_ip() {
   python3 - <<'PY'
@@ -274,10 +337,18 @@ summary() {
   info "http://$ip:$PORT"
   printf '\n'
   bold "3. Start it automatically after reboot"
-  info "Add this line to ~/.termux/boot/start-server.sh, next to your"
-  info "other 'sv up' lines:"
-  printf '\n'
-  info "    sv up $SERVICE_NAME"
+  case "$(boot_status)" in
+    present)
+      info "Already configured in $BOOT_SCRIPT."
+      info "Install the Termux:Boot app (same source as Termux) if you have not."
+      ;;
+    *)
+      info "Not configured yet. Run:"
+      info "    ./scripts/install-termux.sh --setup-boot"
+      info "or add this line to $BOOT_SCRIPT yourself:"
+      info "    $BOOT_LINE"
+      ;;
+  esac
   printf '\n'
   bold "Useful commands"
   info "sv down $SERVICE_NAME        # stop"
@@ -301,6 +372,9 @@ Usage: ./scripts/install-termux.sh [options]
   --port PORT     TCP port (default: $DEFAULT_PORT)
   --host ADDR     bind address (default: 0.0.0.0, i.e. reachable on the LAN)
   --config PATH   config file location
+  --setup-boot    create or update ~/.termux/boot/start-server.sh so the
+                  service starts after a reboot (safe and idempotent: an
+                  existing script is backed up and only appended to)
   --force-setup   re-run the username/password prompt even if a config exists
   -h, --help      show this help
 EOF
@@ -315,6 +389,7 @@ main() {
       --port)         PORT="$2"; shift 2 ;;
       --host)         HOST="$2"; shift 2 ;;
       --config)       CONFIG_PATH="$2"; shift 2 ;;
+      --setup-boot)   SETUP_BOOT=1; shift ;;
       --force-setup)  FORCE_SETUP=1; shift ;;
       -h|--help)      usage; exit 0 ;;
       *)              die "unknown option: $1 (try --help)" ;;
@@ -329,6 +404,7 @@ main() {
   check_port
   configure
   install_service
+  [ "${SETUP_BOOT:-0}" = "1" ] && setup_boot
   summary
 }
 
