@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Rotating logs for the filemanager service, read with:
+#   tail -f $PREFIX/var/log/filemanager/current
+exec svlogd -tt /data/data/com.termux/files/usr/var/log/filemanager

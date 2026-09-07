@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>TermuxFM</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ── login ─────────────────────────────────────────────────────── -->
+<div id="login-screen" class="login-screen" hidden>
+  <form id="login-form" class="login-card" autocomplete="on">
+    <h1 class="login-title">TermuxFM</h1>
+    <p class="login-sub">Sign in to manage your server storage</p>
+    <label class="field">
+      <span>Username</span>
+      <input id="login-user" name="username" autocomplete="username"
+             autocapitalize="none" spellcheck="false" required>
+    </label>
+    <label class="field">
+      <span>Password</span>
+      <input id="login-pass" name="password" type="password"
+             autocomplete="current-password" required>
+    </label>
+    <p id="login-error" class="login-error" role="alert" hidden></p>
+    <button id="login-submit" type="submit" class="btn btn-primary btn-block">
+      Sign in
+    </button>
+  </form>
+</div>
+
+<!-- ── application ───────────────────────────────────────────────── -->
+<div id="app" class="app" hidden>
+
+  <header class="topbar">
+    <button id="btn-menu" class="icon-btn only-mobile" title="Actions"
+            aria-label="Actions">☰</button>
+    <span class="brand" id="brand">Server</span>
+
+    <form id="search-form" class="search">
+      <input id="search-input" type="search" placeholder="Search this folder…"
+             autocapitalize="none" spellcheck="false">
+      <button type="submit" class="icon-btn" title="Search (/)"
+              aria-label="Search">🔍</button>
+    </form>
+
+    <div class="topbar-right">
+      <button id="btn-theme" class="icon-btn" title="Toggle dark mode"
+              aria-label="Toggle dark mode">◐</button>
+      <span id="who" class="who"></span>
+      <button id="btn-logout" class="btn btn-quiet">Log out</button>
+    </div>
+  </header>
+
+  <nav class="crumbbar" aria-label="Breadcrumb">
+    <div id="crumbs" class="crumbs"></div>
+    <button id="btn-refresh" class="icon-btn" title="Refresh"
+            aria-label="Refresh">⟳</button>
+  </nav>
+
+  <div id="toolbar" class="toolbar">
+    <button id="btn-mkdir" class="btn">New folder</button>
+    <button id="btn-upload" class="btn">Upload files</button>
+    <button id="btn-upload-dir" class="btn">Upload folder</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="btn-copy" class="btn" disabled>Copy</button>
+    <button id="btn-cut" class="btn" disabled>Move</button>
+    <button id="btn-paste" class="btn" hidden></button>
+    <button id="btn-paste-cancel" class="icon-btn" hidden
+            title="Clear clipboard" aria-label="Clear clipboard">✕</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="btn-rename" class="btn" disabled>Rename</button>
+    <button id="btn-download" class="btn" disabled>Download</button>
+    <button id="btn-zip" class="btn" disabled>ZIP</button>
+    <button id="btn-size" class="btn" disabled>Size</button>
+    <button id="btn-delete" class="btn btn-danger" disabled>Delete</button>
+    <span class="sep only-mobile" aria-hidden="true"></span>
+    <button id="btn-logout-mobile" class="btn only-mobile">Log out</button>
+  </div>
+
+  <div id="dropzone" class="dropzone">
+    <div id="drop-hint" class="drop-hint" hidden>
+      <span>Drop files or folders here to upload</span>
+    </div>
+
+    <div id="search-banner" class="banner" hidden>
+      <span id="search-banner-text"></span>
+      <button id="btn-clear-search" class="btn btn-quiet">Back to folder</button>
+    </div>
+
+    <table class="listing" id="listing">
+      <thead>
+        <tr>
+          <th class="col-check">
+            <input id="check-all" type="checkbox" aria-label="Select all">
+          </th>
+          <th class="col-name sortable" data-sort="name">Name</th>
+          <th class="col-size sortable" data-sort="size">Size</th>
+          <th class="col-date sortable" data-sort="date">Modified</th>
+          <th class="col-kind sortable" data-sort="type">Type</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <p id="empty-note" class="empty-note" hidden>This folder is empty.</p>
+    <p id="status-line" class="status-line"></p>
+  </div>
+
+  <div id="mobile-actions" class="mobile-actions only-mobile" hidden></div>
+</div>
+
+<!-- ── overlays ──────────────────────────────────────────────────── -->
+<div id="uploads" class="uploads" hidden>
+  <div class="uploads-head">
+    <strong id="uploads-title">Uploading</strong>
+    <button id="uploads-close" class="icon-btn" aria-label="Hide">✕</button>
+  </div>
+  <div class="progress"><div id="uploads-bar" class="progress-fill"></div></div>
+  <ul id="uploads-list" class="uploads-list"></ul>
+</div>
+
+<div id="jobs" class="jobs" aria-live="polite"></div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true"
+       aria-labelledby="modal-title">
+    <h2 id="modal-title" class="modal-title"></h2>
+    <div id="modal-body" class="modal-body"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn btn-quiet">Cancel</button>
+      <button id="modal-ok" class="btn btn-primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="viewer" class="viewer" hidden>
+  <div class="viewer-bar">
+    <span id="viewer-name" class="viewer-name"></span>
+    <a id="viewer-download" class="btn btn-quiet" download>Download</a>
+    <button id="viewer-close" class="icon-btn" aria-label="Close">✕</button>
+  </div>
+  <div id="viewer-body" class="viewer-body"></div>
+</div>
+
+<input id="file-input" type="file" multiple hidden>
+<input id="dir-input" type="file" webkitdirectory directory multiple hidden>
+
+<script src="/app.js"></script>
+</body>
+</html>

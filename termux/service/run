@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/sh
+#
+# Reference termux-services run script.
+#
+# scripts/install-termux.sh generates this file with your actual paths at
+# $PREFIX/var/service/filemanager/run -- this copy is the template, kept in the
+# repo so you can see (or hand-install) exactly what the service does.
+#
+# runit supervises the process, so it MUST stay in the foreground: exec, no
+# daemonising, no trailing '&'.  'python3 -u' keeps output unbuffered so logs
+# reach svlogd immediately, and 'exec 2>&1' folds stderr into the same stream.
+
+exec 2>&1
+
+exec /data/data/com.termux/files/usr/bin/filemanager serve \
+  --root /data/data/com.termux/files/home/storage/shared/Server \
+  --host 0.0.0.0 \
+  --port 8080
