@@ -328,6 +328,45 @@ button, input { font: inherit; color: inherit; }
   margin: 0;
 }
 
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.storage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.storage-bar {
+  display: inline-block;
+  width: 70px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.storage-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+.storage-text { font-variant-numeric: tabular-nums; }
+/* Amber then red as the volume fills, so it is noticed before a copy fails. */
+.storage.warn .storage-fill { background: #d99a1e; }
+.storage.warn .storage-text { color: #d99a1e; }
+.storage.full .storage-fill { background: var(--danger); }
+.storage.full .storage-text { color: var(--danger); font-weight: 600; }
+
 /* ── uploads ─────────────────────────────────────────────────────── */
 
 .uploads {

@@ -98,6 +98,70 @@ def natural_key(name):
     ]
 
 
+# -- volume space -------------------------------------------------------
+
+def disk_usage(path):
+    """Free/total bytes for the volume holding ``path``.
+
+    Uses ``f_bavail`` (space available to an unprivileged process) rather than
+    ``f_bfree``, because on Android the reserved blocks are never ours to use.
+    Returns ``None`` if the platform or the FUSE mount refuses to report, so the
+    UI can simply omit the figure rather than showing a wrong one.
+    """
+    try:
+        st = os.statvfs(path)
+    except (OSError, AttributeError, ValueError):
+        return None
+    block = st.f_frsize or st.f_bsize
+    total = block * st.f_blocks
+    free = block * st.f_bavail
+    if total <= 0:
+        return None
+    used = max(0, total - free)
+    return {
+        "total": total,
+        "free": free,
+        "used": used,
+        # Percent of the volume in use, for a progress bar in the UI.
+        "percent": round(used / total * 100, 1),
+    }
+
+
+#: Headroom left free by pre-flight checks.  Filling an Android volume to the
+#: last byte makes the whole system misbehave, not just this app.
+SPACE_MARGIN = 64 * 1024 ** 2
+
+
+def format_bytes(size):
+    """Human-readable size, for messages the user actually reads."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return "%.1f %s" % (value, unit) if unit != "B" else "%d B" % value
+        value /= 1024.0
+
+
+def check_space(root, needed, *, margin=SPACE_MARGIN, what="operation"):
+    """Refuse an operation that clearly will not fit on the volume.
+
+    Better to say so up front than to fail with ENOSPC halfway through a 40 GB
+    copy, leaving a partial file and a full disk behind.
+    """
+    usage = disk_usage(root)
+    if usage is None:
+        return None                 # cannot tell; let the write try
+    available = usage["free"] - margin
+    if needed > available:
+        raise ApiError(
+            "Not enough space for this %s: it needs %s but only %s is free."
+            % (what, format_bytes(needed), format_bytes(max(0, available))),
+            status=507,
+            code="no_space",
+            extra={"needed": needed, "free": usage["free"]},
+        )
+    return usage
+
+
 # -- listing ------------------------------------------------------------
 
 _SORT_KEYS = {
@@ -410,6 +474,8 @@ def copy(sandbox, sources, dest_rel, mode=CONFLICT_FAIL):
     def run(job):
         stats = measure(resolved, job=job)
         job.set_total(items=stats["files"], nbytes=stats["bytes"])
+        # Now that the real size is known, refuse rather than fill the volume.
+        check_space(sandbox.root, stats["bytes"], what="copy")
         copied = 0
         for src in resolved:
             job.check_cancel()

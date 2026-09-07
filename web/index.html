@@ -107,7 +107,14 @@
     </table>
 
     <p id="empty-note" class="empty-note" hidden>This folder is empty.</p>
-    <p id="status-line" class="status-line"></p>
+
+    <div class="footer">
+      <span id="status-line" class="status-line"></span>
+      <div id="storage" class="storage" hidden title="Storage on this volume">
+        <span class="storage-bar"><span id="storage-fill" class="storage-fill"></span></span>
+        <span id="storage-text" class="storage-text"></span>
+      </div>
+    </div>
   </div>
 
   <div id="mobile-actions" class="mobile-actions only-mobile" hidden></div>

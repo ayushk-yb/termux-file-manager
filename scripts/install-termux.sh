@@ -327,11 +327,22 @@ summary() {
   local ip
   ip="$(lan_ip)"
   printf '\n'
-  bold "TermuxFM is installed."
+  if [ "${WAS_INSTALLED:-0}" = "1" ]; then
+    bold "TermuxFM is updated."
+  else
+    bold "TermuxFM is installed."
+  fi
   printf '\n'
-  bold "1. Start it"
-  info "sv up $SERVICE_NAME"
-  info "sv status $SERVICE_NAME"
+  if [ "${WAS_INSTALLED:-0}" = "1" ]; then
+    bold "1. Restart it to load the new version"
+    info "sv restart $SERVICE_NAME"
+    info "sv status $SERVICE_NAME"
+    info "(the running process keeps the old code until you do)"
+  else
+    bold "1. Start it"
+    info "sv up $SERVICE_NAME"
+    info "sv status $SERVICE_NAME"
+  fi
   printf '\n'
   bold "2. Open it from your computer"
   info "http://$ip:$PORT"
@@ -398,6 +409,13 @@ main() {
 
   bold "TermuxFM installer"
   check_termux
+  # Decided before anything is written, so the summary can tell you whether to
+  # start the service or restart it to pick up new code.
+  if [ -f "$SERVICE_DIR/run" ]; then
+    WAS_INSTALLED=1
+    bold "Existing installation detected -- upgrading in place."
+    info "Your config and your files are left alone."
+  fi
   check_storage
   install_files
   create_tree

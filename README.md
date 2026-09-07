@@ -93,11 +93,13 @@ naive file managers break, and each point below is handled explicitly:
 
 **Browsing** · folder navigation · breadcrumbs · sort by name/size/date/type
 (natural order, so `Season 2` precedes `Season 10`) · file size · modification
-time · recursive folder size on demand · search (recursive, case-insensitive)
+time · recursive folder size on demand · **free space on the phone, always
+visible** · search (recursive, case-insensitive)
 
 **Transfers** · multi-file upload · **folder upload** · drag-and-drop upload of
-files *and* folders · per-file and aggregate progress · download · streaming ZIP
-of any folder · HTTP Range support (so video seeking works)
+files *and* folders · per-file and aggregate progress · **uploads and copies
+refused up front if they will not fit** · download · streaming ZIP of any
+folder · HTTP Range support (so video seeking works)
 
 **Managing** · create folder · rename · move · copy · delete · multi-select
 (click, shift-click, ctrl-click, select-all) · clipboard model (mark → navigate →
@@ -324,6 +326,51 @@ The service runs **in the foreground** under `runit` (`exec`, no daemonising, no
 
 ---
 
+## Updating
+
+Everything lives in the clone, so an update is `git pull` plus a re-install:
+
+```bash
+cd ~/termux-file-manager
+git pull
+./scripts/install-termux.sh
+sv restart filemanager
+```
+
+That is the whole procedure. Notes on why each step is there:
+
+- **`./scripts/install-termux.sh`** copies the new code into
+  `$PREFIX/opt/termuxfm` and rewrites the service file. It detects the existing
+  installation, says *"upgrading in place"*, **keeps your username and
+  password**, and never touches anything under your server root. It will not
+  re-prompt for credentials (use `--force-setup` if you actually want to change
+  them).
+- **`sv restart filemanager`** is required. The running process keeps the old
+  code in memory until it is restarted — the installer prints this reminder when
+  it detects an upgrade. Restarting also ends existing browser sessions, so you
+  will log in again.
+
+Check what is running:
+
+```bash
+filemanager --version
+sv status filemanager
+```
+
+If a `git pull` conflicts because you edited files locally, keep your changes
+aside and replay them:
+
+```bash
+git stash
+git pull
+git stash pop
+```
+
+Downgrading is the same flow against an older commit (`git checkout <tag-or-sha>`,
+re-run the installer, restart). Nothing in an update migrates or rewrites your
+files, so moving between versions is safe in both directions.
+
+
 ## Configuration
 
 Precedence: **CLI flag > environment variable > config file > default.**
@@ -461,7 +508,7 @@ cd termux-file-manager
 python3 -m unittest discover tests -v
 ```
 
-207 tests covering:
+221 tests covering:
 
 | Area | Examples |
 | --- | --- |
@@ -478,6 +525,7 @@ python3 -m unittest discover tests -v
 | **ZIP** | round-trip integrity, nested structure, chunked (no `Content-Length`), symlinks skipped |
 | **HTTP** | 404/405/409/413/422, malformed JSON, static-asset allowlist, security headers, HTTP/1.1 keep-alive, 12 concurrent clients |
 | **Disk footprint** | successful requests and Range floods write no log lines, errors always do, temp files hidden from listings and search, orphan sweep removes old temp files but never in-flight ones or real files, and never follows a symlink out of the tree |
+| **Free space** | figures reported in listings and `/api/me`, listing still works when the filesystem refuses to report, upload refused with 507 leaving no temp file, copy refused leaving the destination untouched, the 64 MB margin is enforced, and a write is allowed when space cannot be determined |
 
 Manual end-to-end checks worth doing after install:
 
@@ -495,6 +543,42 @@ typed confirmation — and finally reboot the phone and confirm port 8080 comes
 back with your other services.
 
 ---
+
+## Free space
+
+The footer always shows what is left on the phone, with a bar that turns amber
+past 85% and red past 95% (or under 1 GB free):
+
+```
+2 folders · 14 files · 8.4 GB          ▓▓▓▓▓▓░░░  42.1 GB free of 106 GB
+```
+
+The figure comes from `statvfs` on the volume holding your root, so it is the
+real Android storage number, not a guess. It refreshes with every listing —
+which the UI reloads after each upload, copy, move and delete — so it is never
+stale. If a filesystem refuses to report (some FUSE mounts do), the indicator is
+simply hidden rather than showing something wrong.
+
+### Running out of space is refused, not discovered halfway
+
+Both sides check before writing anything:
+
+- **Uploads** are checked against `Content-Length` *before* the temp file is
+  created, so a doomed 8 GB upload fails immediately instead of spending ten
+  minutes filling the phone. The browser also checks the whole batch up front
+  and tells you what it needs versus what is available — so 20 queued files
+  never start one by one only to fail.
+- **Copies** are checked after the source tree is measured and before the first
+  byte is written, so the destination is left untouched rather than half-filled.
+
+Both leave a **64 MB margin** free, because an Android volume filled to the last
+byte makes the whole phone misbehave, not just this app. If a write still fails
+(another app filled the disk in the meantime), `ENOSPC` is reported as
+*"Storage is full"* rather than a raw errno, and the partial file is removed.
+
+Moves inside the same volume need no space at all: they are metadata renames,
+so a 40 GB season moves instantly and the free-space figure does not change.
+
 
 ## Disk and memory footprint
 
@@ -594,7 +678,7 @@ All endpoints require the session cookie; mutating ones also require
 | --- | --- | --- |
 | `POST` | `/api/login`, `/api/logout` | |
 | `GET` | `/api/me`, `/api/ping` | |
-| `GET` | `/api/list`, `/api/stat` | `?path=&sort=&order=` |
+| `GET` | `/api/list`, `/api/stat` | `?path=&sort=&order=`; the listing also carries `disk` (free/total bytes) |
 | `POST` | `/api/mkdir`, `/api/rename` | |
 | `POST` | `/api/copy`, `/api/move`, `/api/delete` | → `202` job |
 | `POST` | `/api/search`, `/api/du` | → `202` job |

@@ -107,6 +107,7 @@ def register(app):
             "root": os.path.basename(app.sandbox.root),
             "max_upload_bytes": app.cfg.max_upload_bytes,
             "version": __import__("termuxfm").__version__,
+            "disk": fsops.disk_usage(app.sandbox.root),
         })
 
     # -- browsing -----------------------------------------------------
@@ -120,8 +121,11 @@ def register(app):
             raise InvalidRequest("Unknown sort field")
         if order not in ("asc", "desc"):
             raise InvalidRequest("order must be asc or desc")
-        return json_response(fsops.listdir(app.sandbox, req.q("path", ""),
-                                           sort, order))
+        listing = fsops.listdir(app.sandbox, req.q("path", ""), sort, order)
+        # Piggy-backed on the listing the UI already fetches after every
+        # navigation, upload and delete -- no extra request, always current.
+        listing["disk"] = fsops.disk_usage(app.sandbox.root)
+        return json_response(listing)
 
     @app.route("GET", "/api/stat")
     def stat_one(app, req):
@@ -259,6 +263,9 @@ def register(app):
         length = req.content_length
         if length is None:
             raise InvalidRequest("Content-Length is required for uploads")
+        # Refuse before creating the temp file, so a doomed 8 GB upload does
+        # not spend ten minutes filling the phone and then fail.
+        fsops.check_space(app.sandbox.root, length, what="upload")
         target = transfer.prepare_upload_target(
             app.sandbox, dir_rel, filename, rel_path, conflict
         )

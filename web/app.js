@@ -20,7 +20,12 @@ const state = {
   maxUpload: 0,
   searchMode: false,
   sizes: new Map(),       // path -> recursive byte size
+  disk: null,             // {total, free, used, percent} for the volume
 };
+
+// Matches the server's headroom (fsops.SPACE_MARGIN): never fill an Android
+// volume to the last byte.
+const SPACE_MARGIN = 64 * 1024 * 1024;
 
 /* ── helpers ─────────────────────────────────────────────────────── */
 
@@ -244,6 +249,7 @@ function showApp(session) {
   state.csrf = session.csrf;
   state.user = session.username;
   state.maxUpload = session.max_upload_bytes || 0;
+  if (session.disk) state.disk = session.disk;
   $('login-screen').hidden = true;
   $('app').hidden = false;
   $('who').textContent = session.username;
@@ -296,6 +302,7 @@ async function navigate(path, { push = true } = {}) {
     );
     state.path = data.path;
     state.entries = data.entries;
+    if (data.disk) state.disk = data.disk;
     state.selected.clear();
     state.lastIndex = null;
     state.searchMode = false;
@@ -450,6 +457,24 @@ function render() {
   updateToolbar();
 }
 
+function renderStorage() {
+  const box = $('storage');
+  const disk = state.disk;
+  if (!disk) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  $('storage-fill').style.width = Math.min(100, disk.percent) + '%';
+  $('storage-text').textContent =
+    formatSize(disk.free) + ' free of ' + formatSize(disk.total);
+  const nearlyFull = disk.free < 1024 * 1024 * 1024 || disk.percent >= 95;
+  box.classList.toggle('full', nearlyFull);
+  box.classList.toggle('warn', !nearlyFull && disk.percent >= 85);
+  box.title = 'Storage on this volume: ' + formatSize(disk.used) + ' of '
+    + formatSize(disk.total) + ' used (' + disk.percent + '%)';
+}
+
 function updateStatus() {
   const folders = state.entries.filter((e) => e.is_dir).length;
   const files = state.entries.length - folders;
@@ -460,6 +485,7 @@ function updateStatus() {
   if (files) parts.push(formatSize(bytes));
   if (state.selected.size) parts.push(state.selected.size + ' selected');
   $('status-line').textContent = parts.join(' · ');
+  renderStorage();
 }
 
 function updateToolbar() {
@@ -1032,7 +1058,23 @@ $('uploads-close').onclick = () => {
   uploadStats = { total: 0, done: 0, bytesTotal: 0, bytesDone: 0 };
 };
 
-function enqueueUploads(files, dest) {
+async function enqueueUploads(files, dest) {
+  // Refuse the whole batch up front rather than uploading for ten minutes and
+  // failing on the last file. The server enforces this too.
+  const incoming = files.reduce(
+    (sum, entry) => sum + ((entry.file || entry).size || 0), 0);
+  if (state.disk) {
+    const queued = uploadStats.bytesTotal - uploadStats.bytesDone;
+    const room = state.disk.free - SPACE_MARGIN - queued;
+    if (incoming > room) {
+      await messageModal('Not enough space', [
+        'These ' + files.length + ' file(s) need ' + formatSize(incoming) + '.',
+        'Only ' + formatSize(Math.max(0, room)) + ' is available on the phone.',
+        'Free up space, or upload fewer files at a time.',
+      ]);
+      return;
+    }
+  }
   const accepted = [];
   files.forEach((entry) => {
     const file = entry.file || entry;
@@ -1067,6 +1109,7 @@ function pumpUploads() {
   }
   if (!activeUploads && !uploadQueue.length) {
     state.sizes.clear();
+    // Re-listing also refreshes the free-space figure.
     navigate(state.path, { push: false });
   }
 }
@@ -1212,7 +1255,7 @@ dropzone.addEventListener('drop', async (event) => {
   } else {
     [...event.dataTransfer.files].forEach((file) => collected.push({ file }));
   }
-  if (collected.length) enqueueUploads(collected, state.path);
+  if (collected.length) await enqueueUploads(collected, state.path);
 });
 
 /* ── keyboard, theme, menu ───────────────────────────────────────── */
