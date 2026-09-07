@@ -29,6 +29,11 @@ from .safepath import sanitize_name
 
 CHUNK = 512 * 1024
 
+#: Prefix for in-flight upload temp files.  Defined here, the lowest layer, and
+#: imported by transfer.py: these files are an implementation detail rather than
+#: content, so listings and searches skip them.
+PART_PREFIX = ".termuxfm-part-"
+
 CONFLICT_FAIL = "fail"
 CONFLICT_RENAME = "rename"
 CONFLICT_OVERWRITE = "overwrite"
@@ -111,6 +116,8 @@ def listdir(sandbox, rel, sort="name", order="asc"):
     try:
         with os.scandir(path) as it:
             for entry in it:
+                if entry.name.startswith(PART_PREFIX):
+                    continue
                 try:
                     is_link = entry.is_symlink()
                     # One stat per entry, from scandir's cache.
@@ -599,6 +606,8 @@ def search(sandbox, rel, query, *, limit=SEARCH_MAX_RESULTS):
             try:
                 with os.scandir(current) as it:
                     for entry in it:
+                        if entry.name.startswith(PART_PREFIX):
+                            continue
                         scanned += 1
                         if scanned % 500 == 0:
                             job.check_cancel()

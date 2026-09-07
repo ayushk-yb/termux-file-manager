@@ -228,6 +228,15 @@ exec svlogd -tt $LOG_DIR
 EOF
   chmod 755 "$SERVICE_DIR/log/run"
 
+  # Cap the logs explicitly. Without this file svlogd falls back to its own
+  # default (1 MB x 10 = ~10 MB); 256 KB x 4 is ample for troubleshooting a
+  # single-user file manager and keeps the phone's storage out of it.
+  cat > "$LOG_DIR/config" <<'EOF'
+s262144
+n3
+EOF
+  ok "log size capped at ~1 MB total ($LOG_DIR/config)"
+
   # No 'down' file: the service starts on its own once runsvdir scans it, which
   # is what makes it come back after a reboot.
   rm -f "$SERVICE_DIR/down"

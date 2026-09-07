@@ -14,13 +14,19 @@ import base64
 import errno
 import os
 import secrets
+import time
 
 from .errors import (ApiError, InvalidRequest, PayloadTooLarge,
                      RangeNotSatisfiable)
-from .fsops import CHUNK, apply_conflict, classify
+from .fsops import CHUNK, PART_PREFIX, apply_conflict, classify
 from .safepath import sanitize_name, split_relpath
 
 TEXT_PREVIEW_LIMIT = 1024 * 1024
+
+#: Android kills background processes.  A partial upload interrupted that way
+#: leaves a temp file behind that nothing would ever remove, so anything older
+#: than this is considered abandoned and reclaimed.
+PART_MAX_AGE = 6 * 3600
 
 #: Only these are ever served inline.  Everything else -- HTML above all -- is
 #: forced to download, so a file stored here can never execute as script on the
@@ -119,9 +125,7 @@ def receive_upload(stream, target, expected_length, max_bytes, *, on_chunk=None)
             "Upload is %d bytes; the limit is %d" % (expected_length, max_bytes)
         )
     directory = os.path.dirname(target)
-    tmp = os.path.join(
-        directory, ".termuxfm-part-%s" % secrets.token_hex(8)
-    )
+    tmp = os.path.join(directory, PART_PREFIX + secrets.token_hex(8))
     written = 0
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -253,6 +257,46 @@ def preview_kind(name, size):
         # of a big log is exactly what you want to see.
         return "text", "text/plain; charset=utf-8"
     return None, mime
+
+
+def sweep_partials(root, max_age=PART_MAX_AGE, limit=200000):
+    """Reclaim orphaned upload temp files under ``root``.
+
+    Uses ``scandir`` only (no reads) and never follows a symlink.  Returns a
+    summary so the caller can log it -- silently deleting nothing is the normal
+    case and should stay quiet.
+    """
+    cutoff = time.time() - max_age
+    removed, freed, scanned = 0, 0, 0
+    stack = [root]
+    while stack and scanned < limit:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    scanned += 1
+                    if scanned >= limit:
+                        break
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                            continue
+                        if not entry.name.startswith(PART_PREFIX):
+                            continue
+                        st = entry.stat(follow_symlinks=False)
+                        if st.st_mtime > cutoff:
+                            continue          # an upload may be in flight
+                        size = st.st_size
+                        os.unlink(entry.path)
+                        removed += 1
+                        freed += size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return {"removed": removed, "freed": freed, "scanned": scanned}
 
 
 def looks_binary(path, probe=8192):

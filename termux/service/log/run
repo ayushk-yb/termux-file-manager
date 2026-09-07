@@ -1,4 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/sh
 # Rotating logs for the filemanager service, read with:
 #   tail -f $PREFIX/var/log/filemanager/current
+#
+# The installer also writes a 'config' file next to the logs holding:
+#     s262144
+#     n3
+# which caps them at 256 KB x 4 = ~1 MB total. Without it svlogd would use its
+# own default of 1 MB x 10 = ~10 MB.
 exec svlogd -tt /data/data/com.termux/files/usr/var/log/filemanager

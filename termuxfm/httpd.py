@@ -212,12 +212,16 @@ class Request:
 class App:
     """Shared server state, handed to every route."""
 
-    def __init__(self, cfg, sandbox, auth, jobs, webroot):
+    def __init__(self, cfg, sandbox, auth, jobs, webroot, access_log=False):
         self.cfg = cfg
         self.sandbox = sandbox
         self.auth = auth
         self.jobs = jobs
         self.webroot = os.path.realpath(webroot)
+        # Off by default: one video seek session plus UI polling is tens of
+        # thousands of requests, and a phone should not spend its storage
+        # recording that nothing went wrong.
+        self.access_log = access_log
         self.started = time.time()
         self.routes = {}
 
@@ -245,6 +249,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_error(self, fmt, *args):
         self.app.log("%s error: %s" % (self.client_address[0], fmt % args))
+
+    def log_request(self, code="-", size="-"):
+        """Log a completed request.
+
+        Successful requests are silent unless --access-log is set: a listing
+        refresh, a job poll and every Range request of a video would otherwise
+        each cost a line on the phone's storage.  Client and server errors are
+        always recorded, because those are what you troubleshoot.
+        """
+        status = code.value if hasattr(code, "value") else code
+        if not self.app.access_log:
+            try:
+                if int(status) < 400:
+                    return
+            except (TypeError, ValueError):
+                pass
+        super().log_request(code, size)
 
     def do_GET(self):
         self._dispatch()

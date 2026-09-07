@@ -246,6 +246,7 @@ server refuses to start if that file is group- or world-readable.
 filemanager setup      # first-run: choose username + password
 filemanager passwd     # change the password
 filemanager check      # validate config, root and web assets
+filemanager clean      # reclaim orphaned upload temp files
 filemanager --version
 ```
 
@@ -329,7 +330,8 @@ are never exposed, and the `Server` header does not leak the Python version.
 
 **Resource limits.** Per-file upload cap (default 16 GB, configurable), 1 MB
 JSON body cap, capped concurrent threads (a client cannot fork-bomb the phone),
-bounded search (depth, deadline, result count), and bounded job history.
+bounded search (depth, deadline, result count), bounded job history, and capped
+logs — see [Disk and memory footprint](#disk-and-memory-footprint).
 
 **What it does *not* do:** no HTTPS (plain HTTP on the LAN), no per-transfer
 rate limiting. **Do not port-forward this to the internet.** If you need remote
@@ -355,7 +357,7 @@ cd FileManagerService
 python3 -m unittest discover tests -v
 ```
 
-193 tests covering:
+207 tests covering:
 
 | Area | Examples |
 | --- | --- |
@@ -371,6 +373,7 @@ python3 -m unittest discover tests -v
 | **Filename edge cases** | spaces, quotes, `&`, `#`, `%`, `+`, brackets, CJK, emoji, 200-char names, 255-**byte** cap, NFC normalisation, Android-reserved characters |
 | **ZIP** | round-trip integrity, nested structure, chunked (no `Content-Length`), symlinks skipped |
 | **HTTP** | 404/405/409/413/422, malformed JSON, static-asset allowlist, security headers, HTTP/1.1 keep-alive, 12 concurrent clients |
+| **Disk footprint** | successful requests and Range floods write no log lines, errors always do, temp files hidden from listings and search, orphan sweep removes old temp files but never in-flight ones or real files, and never follows a symlink out of the tree |
 
 Manual end-to-end checks worth doing after install:
 
@@ -386,6 +389,62 @@ and a folder by drag-and-drop, ZIP a folder, scrub a video preview to the middle
 (this proves Range works), check a folder's recursive size, delete with the
 typed confirmation — and finally reboot the phone and confirm port 8080 comes
 back with your other services.
+
+---
+
+## Disk and memory footprint
+
+An always-on phone must not quietly fill its own storage, so both paths that
+could grow without bound are capped.
+
+**Logs: ~1 MB, hard ceiling.** Successful requests are **not** logged. That
+matters more than it sounds: seeking around one video is thousands of HTTP Range
+requests and the UI polls job progress while a copy runs, so per-request logging
+turned 240 requests into 22 KB — megabytes over an evening, recording only that
+nothing went wrong. Now the same 240 requests write **488 bytes**, which is the
+startup banner plus one login line. What is still recorded is what you would
+actually troubleshoot: startup, logins, uploads, every 4xx/5xx, and unhandled
+errors.
+
+On top of that, the installer writes `$PREFIX/var/log/filemanager/config`:
+
+```
+s262144
+n3
+```
+
+which caps `svlogd` at 256 KB × 4 ≈ **1 MB total**, rotated. Without that file
+svlogd would use its own default of 1 MB × 10 ≈ 10 MB. To keep more history,
+raise `s`/`n` there and `sv restart filemanager`.
+
+Need per-request logs to debug something? Add `--access-log` to the service
+`run` script temporarily — the 1 MB cap still applies.
+
+**Orphaned upload temp files: swept automatically.** An upload streams to a
+`.termuxfm-part-*` file in the destination directory before an atomic rename.
+If Android's low-memory killer stops the service mid-upload, that partial file —
+potentially gigabytes — would otherwise sit there forever. So:
+
+- temp files are **hidden from listings and search** (they are not content);
+- on startup a background sweep reclaims any older than 6 hours, logging only
+  when it actually frees something;
+- files younger than that are never touched, so a concurrent upload is safe.
+
+Run it by hand any time:
+
+```bash
+filemanager clean                      # anything older than 6 hours
+filemanager clean --older-than 60      # more aggressive
+```
+
+**No other disk growth.** No database, no thumbnail cache, no session store, no
+search index — directory listings come straight from `scandir`. The only state
+outside your own files is the ~1 KB config file.
+
+**Memory: ~28 MB RSS.** Measured *after* a 200 MB upload and a Range read 100 MB
+into that file, because transfers stream in 512 KB chunks and never land in
+memory. Bounded in-memory state: at most 64 sessions, 200 job records (reaped 10
+minutes after finishing), 512 cached folder sizes, and 32 request threads.
 
 ---
 
@@ -469,6 +528,10 @@ optimisation in Android settings.
 
 **Uploads fail at a certain size** — raise the cap:
 `filemanager serve --max-upload 32G` (or edit the service `run` script).
+
+**Storage disappeared after a failed upload** — Android may have killed the
+service mid-transfer. Reclaim the partial file with `filemanager clean` (a
+restart does this automatically for anything older than 6 hours).
 
 ---
 

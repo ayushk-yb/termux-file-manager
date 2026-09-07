@@ -5,6 +5,7 @@ import getpass
 import os
 import socket
 import sys
+import threading
 
 from . import __version__
 from .auth import AuthManager, hash_password
@@ -13,6 +14,7 @@ from .config import (DEFAULT_HOST, DEFAULT_MAX_UPLOAD, DEFAULT_PORT,
                      default_config_path)
 from .jobs import JobRegistry
 from .safepath import Sandbox
+from .transfer import PART_MAX_AGE, sweep_partials
 
 WEBROOT_CANDIDATES = (
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web"),
@@ -96,6 +98,9 @@ def build_parser():
                        help="session lifetime in seconds (default: %d)"
                             % DEFAULT_SESSION_TTL)
     serve.add_argument("--webroot", default=None, help="path to the web/ assets")
+    serve.add_argument("--access-log", dest="access_log", action="store_true",
+                       help="log every request, not just errors (verbose: a "
+                            "video seek session is thousands of lines)")
 
     setup = sub.add_parser("setup", help="create the config and set a password")
     common(setup)
@@ -116,6 +121,14 @@ def build_parser():
 
     check = sub.add_parser("check", help="validate the configuration and exit")
     common(check)
+
+    clean = sub.add_parser(
+        "clean", help="reclaim orphaned upload temp files")
+    common(clean)
+    clean.add_argument("--older-than", dest="older_than", type=int,
+                       default=None,
+                       help="only remove temp files older than this many "
+                            "seconds (default: %d)" % PART_MAX_AGE)
     return parser
 
 
@@ -212,6 +225,46 @@ def cmd_check(args):
     return 0
 
 
+def _format_bytes(size):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return "%.1f %s" % (size, unit)
+        size /= 1024.0
+
+
+def cmd_clean(args):
+    cfg, root = _load_for_serving(args)
+    age = PART_MAX_AGE if args.older_than is None else args.older_than
+    result = sweep_partials(root, max_age=age)
+    if result["removed"]:
+        print("Removed %d orphaned upload temp file(s), freeing %s."
+              % (result["removed"], _format_bytes(result["freed"])))
+    else:
+        print("Nothing to clean (%d entries scanned)." % result["scanned"])
+    return 0
+
+
+def _sweep_in_background(app, root):
+    """Reclaim temp files left behind by a previous kill, without delaying boot.
+
+    Android's low-memory killer can stop the service mid-upload, and the temp
+    file it leaves could be gigabytes.  Nothing else would ever remove it.
+    """
+
+    def run():
+        try:
+            result = sweep_partials(root)
+        except Exception as exc:              # noqa: BLE001 -- never fatal
+            app.log("temp-file sweep failed: %s" % exc)
+            return
+        if result["removed"]:
+            app.log("reclaimed %d orphaned upload temp file(s), %s"
+                    % (result["removed"], _format_bytes(result["freed"])))
+
+    thread = threading.Thread(target=run, name="termuxfm-sweep", daemon=True)
+    thread.start()
+
+
 def cmd_serve(args):
     from .api import register
     from .httpd import App, serve_forever
@@ -221,7 +274,8 @@ def cmd_serve(args):
     sandbox = Sandbox(root)
     jobs = JobRegistry()
     auth = AuthManager(cfg)
-    app = App(cfg, sandbox, auth, jobs, webroot)
+    app = App(cfg, sandbox, auth, jobs, webroot,
+              access_log=getattr(args, "access_log", False))
     jobs.set_logger(app.log)
     register(app)
 
@@ -230,6 +284,9 @@ def cmd_serve(args):
     app.log("webroot   %s" % webroot)
     app.log("user      %s" % cfg.username)
     app.log("listening on http://%s:%d" % (cfg.host, cfg.port))
+    if not app.access_log:
+        app.log("logging errors only (pass --access-log for every request)")
+    _sweep_in_background(app, sandbox.root)
     if cfg.host in ("0.0.0.0", "::"):
         app.log("LAN URL   http://%s:%d" % (lan_address(), cfg.port))
     try:
@@ -258,5 +315,6 @@ def main(argv=None):
         "setup": cmd_setup,
         "passwd": cmd_passwd,
         "check": cmd_check,
+        "clean": cmd_clean,
     }
     return handlers[args.command](args)
