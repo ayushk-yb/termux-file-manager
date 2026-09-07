@@ -60,6 +60,74 @@ function formatDate(epoch) {
   return date.toLocaleString(undefined, opts);
 }
 
+function formatRate(bytesPerSecond) {
+  if (!bytesPerSecond || bytesPerSecond < 1) return '';
+  return formatSize(bytesPerSecond) + '/s';
+}
+
+function formatEta(seconds) {
+  if (!isFinite(seconds) || seconds <= 0) return '';
+  if (seconds < 60) return Math.round(seconds) + 's left';
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    return minutes + 'm ' + Math.round(seconds % 60) + 's left';
+  }
+  const hours = Math.floor(seconds / 3600);
+  return hours + 'h ' + Math.round((seconds % 3600) / 60) + 'm left';
+}
+
+function clockNow() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/** Exponentially smoothed transfer rate, so the figure does not jitter.
+ *
+ * Timestamps and rates are tracked with explicit `null` sentinels and a sample
+ * counter rather than truthiness: a legitimate value of 0 (the clock at time
+ * zero, or a genuinely stalled transfer) would otherwise read as
+ * "uninitialised" and reset the meter on every progress event.
+ */
+function makeRateMeter() {
+  return { bps: 0, samples: 0, lastBytes: 0, lastTime: null, startTime: null };
+}
+
+function noteRate(meter, totalBytes) {
+  const now = clockNow();
+  if (meter.lastTime === null) {
+    meter.lastTime = now;
+    meter.lastBytes = totalBytes;
+    if (meter.startTime === null) meter.startTime = now;
+    return meter.bps;
+  }
+  const elapsed = (now - meter.lastTime) / 1000;
+  if (elapsed < 0.3) return meter.bps;      // sample at most ~3x per second
+  const instant = (totalBytes - meter.lastBytes) / elapsed;
+  meter.bps = meter.samples ? meter.bps * 0.7 + instant * 0.3 : instant;
+  meter.samples += 1;
+  meter.lastTime = now;
+  meter.lastBytes = totalBytes;
+  return meter.bps;
+}
+
+/** Mean rate since the transfer began, measured against the wall clock.
+ *
+ * This is the fallback whenever the smoothed meter has nothing to report --
+ * which happens when the browser hands a large body to the socket in one burst
+ * and every progress event arrives clustered at the end. Without it a fast
+ * connection can show no speed at all.
+ */
+function meterAverage(meter, totalBytes, until) {
+  if (meter.startTime === null) return 0;
+  const end = until === undefined ? clockNow() : until;
+  const seconds = (end - meter.startTime) / 1000;
+  return seconds > 0.35 ? totalBytes / seconds : 0;
+}
+
+/** Best available rate: the smoothed figure, else the average since start. */
+function meterRate(meter, totalBytes) {
+  return meter.bps > 0 ? meter.bps : meterAverage(meter, totalBytes);
+}
+
 const ICONS = {
   dir: '📁', video: '🎬', audio: '🎵', image: '🖼️', text: '📄',
   archive: '🗜️', document: '📕', file: '📦',
@@ -394,6 +462,17 @@ function render() {
 
     const nameCell = el('td');
     const wrap = el('div', 'cell-name');
+
+    const pencil = el('button', 'row-rename', '✏️');
+    pencil.type = 'button';
+    pencil.title = 'Rename';
+    pencil.setAttribute('aria-label', 'Rename ' + entry.name);
+    pencil.onclick = (event) => {
+      event.stopPropagation();          // renaming is not selecting
+      renameEntry(path);
+    };
+    wrap.appendChild(pencil);
+
     wrap.appendChild(el('span', 'entry-icon', ICONS[entry.kind] || ICONS.file));
     const link = el('button', 'entry-link', entry.name);
     link.title = entry.name;
@@ -642,6 +721,8 @@ async function openViewer(entry, path) {
   const viewer = $('viewer');
   const body = $('viewer-body');
   body.textContent = '';
+  // Media must fit the window (its native seek bar included); text scrolls.
+  body.className = entry.kind === 'text' ? 'viewer-body' : 'viewer-body media';
   $('viewer-name').textContent = entry.name;
   const link = $('viewer-download');
   link.href = '/api/download?path=' + q(path);
@@ -833,8 +914,7 @@ $('btn-mkdir').onclick = async () => {
   }
 };
 
-$('btn-rename').onclick = async () => {
-  const path = [...state.selected][0];
+async function renameEntry(path) {
   if (!path) return;
   const name = await promptModal('Rename', 'New name', baseName(path), 'Rename');
   if (!name || name === baseName(path)) return;
@@ -844,7 +924,9 @@ $('btn-rename').onclick = async () => {
   } catch (err) {
     await messageModal('Could not rename', err.message);
   }
-};
+}
+
+$('btn-rename').onclick = () => renameEntry([...state.selected][0]);
 
 $('btn-download').onclick = () => {
   const path = [...state.selected][0];
@@ -1020,6 +1102,7 @@ const uploadQueue = [];
 let activeUploads = 0;
 const MAX_PARALLEL_UPLOADS = 2;
 let uploadStats = { total: 0, done: 0, bytesTotal: 0, bytesDone: 0 };
+let uploadMeter = makeRateMeter();
 
 function b64url(text) {
   // btoa needs latin1, so encode UTF-8 by hand first.
@@ -1032,12 +1115,16 @@ function b64url(text) {
 function uploadRow(item) {
   const li = el('li');
   const name = el('span', 'u-name', item.relPath || item.file.name);
+  const rateSpan = el('span', 'u-rate', '');
   const stateSpan = el('span', 'u-state', 'waiting');
   li.appendChild(name);
+  li.appendChild(rateSpan);
   li.appendChild(stateSpan);
   $('uploads-list').appendChild(li);
   item.row = li;
+  item.rateSpan = rateSpan;
   item.stateSpan = stateSpan;
+  item.meter = makeRateMeter();
 }
 
 function refreshUploadPanel() {
@@ -1050,12 +1137,32 @@ function refreshUploadPanel() {
   $('uploads-title').textContent = remaining
     ? 'Uploading ' + remaining + ' file(s)'
     : 'Uploaded ' + uploadStats.done + ' file(s)';
+
+  const rateBox = $('uploads-rate');
+  if (!remaining) {
+    // Finished: report the average rather than a decaying live figure.
+    const average = meterAverage(uploadMeter, uploadStats.bytesDone,
+                                 uploadMeter.lastTime);
+    rateBox.textContent = average ? 'avg ' + formatRate(average) : '';
+    return;
+  }
+  const bps = meterRate(uploadMeter, uploadStats.bytesDone);
+  const parts = [];
+  if (bps > 0) parts.push(formatRate(bps));
+  const left = uploadStats.bytesTotal - uploadStats.bytesDone;
+  if (bps > 0 && left > 0) {
+    const eta = formatEta(left / bps);
+    if (eta) parts.push(eta);
+  }
+  rateBox.textContent = parts.join(' · ');
 }
 
 $('uploads-close').onclick = () => {
   $('uploads').hidden = true;
   $('uploads-list').textContent = '';
   uploadStats = { total: 0, done: 0, bytesTotal: 0, bytesDone: 0 };
+  uploadMeter = makeRateMeter();
+  $('uploads-rate').textContent = '';
 };
 
 async function enqueueUploads(files, dest) {
@@ -1115,6 +1222,11 @@ function pumpUploads() {
 }
 
 function startUpload(item) {
+  // Clocks start when the body starts going out, so a rate can be shown even
+  // if progress events all arrive in one late burst.
+  const startedAt = clockNow();
+  item.meter.startTime = startedAt;
+  if (uploadMeter.startTime === null) uploadMeter.startTime = startedAt;
   // XHR, not fetch: only XHR reports upload progress in current browsers.
   const xhr = new XMLHttpRequest();
   const url = '/api/upload?dir=' + q(item.dest) + '&conflict=rename';
@@ -1129,10 +1241,14 @@ function startUpload(item) {
     counted = event.loaded;
     const percent = Math.round(event.loaded / event.total * 100);
     item.stateSpan.textContent = percent + '%';
+    noteRate(item.meter, event.loaded);
+    noteRate(uploadMeter, uploadStats.bytesDone);
+    item.rateSpan.textContent = formatRate(meterRate(item.meter, event.loaded));
     refreshUploadPanel();
   };
   xhr.onload = () => {
     uploadStats.done += 1;
+    item.rateSpan.textContent = '';
     if (xhr.status >= 200 && xhr.status < 300) {
       item.stateSpan.textContent = 'done';
       item.stateSpan.classList.add('u-done');
@@ -1152,6 +1268,7 @@ function startUpload(item) {
   };
   xhr.onerror = () => {
     uploadStats.done += 1;
+    item.rateSpan.textContent = '';
     item.stateSpan.textContent = 'network error';
     item.stateSpan.classList.add('u-error');
     activeUploads -= 1;

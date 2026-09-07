@@ -97,16 +97,19 @@ time · recursive folder size on demand · **free space on the phone, always
 visible** · search (recursive, case-insensitive)
 
 **Transfers** · multi-file upload · **folder upload** · drag-and-drop upload of
-files *and* folders · per-file and aggregate progress · **uploads and copies
-refused up front if they will not fit** · download · streaming ZIP of any
-folder · HTTP Range support (so video seeking works)
+files *and* folders · per-file and aggregate progress with **live speed and
+ETA** · **uploads and copies refused up front if they will not fit** ·
+download · streaming ZIP of any folder · HTTP Range support (so video seeking
+works)
 
-**Managing** · create folder · rename · move · copy · delete · multi-select
+**Managing** · create folder · rename (from the toolbar, `F2`, or the pencil
+that appears on the row itself) · move · copy · delete · multi-select
 (click, shift-click, ctrl-click, select-all) · clipboard model (mark → navigate →
 paste) · drag a selection onto a folder row to move it · conflict handling
 (fail / keep both / overwrite)
 
-**Previews** · images · video and audio (seekable) · text files (first 1 MB)
+**Previews** · images · video and audio, seekable, sized so the player and its
+seek bar always fit the window without scrolling · text files (first 1 MB)
 
 **Interface** · works on desktop and phone · dark mode (follows the system, with
 a manual toggle) · keyboard shortcuts (`/` search, `F2` rename, `Delete`,
@@ -546,8 +549,9 @@ back with your other services.
 
 ## Free space
 
-The footer always shows what is left on the phone, with a bar that turns amber
-past 85% and red past 95% (or under 1 GB free):
+The footer always shows what is left on the phone, with a bar that runs blue
+while there is room, turns yellow past 85%, and red past 95% (or under 1 GB
+free):
 
 ```
 2 folders · 14 files · 8.4 GB          ▓▓▓▓▓▓░░░  42.1 GB free of 106 GB

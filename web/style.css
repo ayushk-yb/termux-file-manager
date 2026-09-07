@@ -11,6 +11,7 @@
   --accent-text: #ffffff;
   --danger: #c62828;
   --ok: #1b7f4b;
+  --warn: #b8860b;
   --row-hover: #f0f4fb;
   --row-selected: #dbe8ff;
   --shadow: 0 6px 24px rgba(15, 22, 36, .16);
@@ -30,6 +31,7 @@
     --accent-text: #08101f;
     --danger: #ef5350;
     --ok: #4cd08a;
+    --warn: #e8b931;
     --row-hover: #232a34;
     --row-selected: #2b3a55;
     --shadow: 0 6px 24px rgba(0, 0, 0, .5);
@@ -47,6 +49,7 @@
   --accent-text: #08101f;
   --danger: #ef5350;
   --ok: #4cd08a;
+  --warn: #e8b931;
   --row-hover: #232a34;
   --row-selected: #2b3a55;
   --shadow: 0 6px 24px rgba(0, 0, 0, .5);
@@ -289,6 +292,35 @@ button, input { font: inherit; color: inherit; }
 .listing tbody tr.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .cell-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+/* Rename affordance on the row itself. Space is always reserved and only the
+   opacity changes, so rows never shift as the pointer moves down the list. */
+.row-rename {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 22px;
+  opacity: 0;
+  transition: opacity .12s linear;
+}
+tr:hover .row-rename,
+tr.selected .row-rename { opacity: .75; }
+.row-rename:hover { opacity: 1; background: var(--surface-2); }
+.row-rename:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Touch screens have no hover, so keep it permanently visible there. */
+@media (hover: none) {
+  .row-rename { opacity: .6; }
+}
 .entry-icon { width: 20px; text-align: center; flex: none; }
 .entry-name {
   overflow: hidden;
@@ -347,8 +379,8 @@ button, input { font: inherit; color: inherit; }
 }
 .storage-bar {
   display: inline-block;
-  width: 70px;
-  height: 6px;
+  width: 78px;
+  height: 8px;
   border-radius: 3px;
   background: var(--surface-2);
   overflow: hidden;
@@ -358,12 +390,14 @@ button, input { font: inherit; color: inherit; }
   display: block;
   height: 100%;
   width: 0;
-  background: var(--accent);
+  background: var(--accent);          /* blue: healthy */
+  transition: width .2s linear, background-color .2s linear;
 }
 .storage-text { font-variant-numeric: tabular-nums; }
-/* Amber then red as the volume fills, so it is noticed before a copy fails. */
-.storage.warn .storage-fill { background: #d99a1e; }
-.storage.warn .storage-text { color: #d99a1e; }
+/* Blue -> yellow (>=85%) -> red (>=95% or under 1 GB free), so a volume
+   filling up is noticed before a copy fails. */
+.storage.warn .storage-fill { background: var(--warn); }
+.storage.warn .storage-text { color: var(--warn); }
 .storage.full .storage-fill { background: var(--danger); }
 .storage.full .storage-text { color: var(--danger); font-weight: 600; }
 
@@ -384,9 +418,16 @@ button, input { font: inherit; color: inherit; }
 .uploads-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+}
+.uploads-head strong { flex: 1; min-width: 0; }
+.uploads-rate {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .uploads-list {
   list-style: none;
@@ -410,7 +451,19 @@ button, input { font: inherit; color: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.uploads-list .u-state { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.uploads-list .u-state {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.uploads-list .u-rate {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 62px;
+  text-align: right;
+}
 .uploads-list .u-error { color: var(--danger); }
 .uploads-list .u-done { color: var(--ok); }
 
@@ -515,16 +568,32 @@ button, input { font: inherit; color: inherit; }
 .viewer-bar .icon-btn { color: #f2f4f7; }
 .viewer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-body {
-  flex: 1;
+  flex: 1 1 auto;
+  /* Without this, the flex item's automatic minimum size is the media's
+     intrinsic height (1080px for a HD video), which pushes the native seek
+     bar below the fold and forces the whole overlay to scroll. */
+  min-height: 0;
   display: grid;
+  /* minmax(0, 1fr) rather than the implicit auto track: an auto row sizes to
+     the media's max-content height, and the child's `max-height: 100%` would
+     then resolve against that 1080px grid area instead of the visible box --
+     which is precisely how the seek bar ends up below the fold. */
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   overflow: auto;
   padding: 12px;
 }
+/* Media fits the window; only text is allowed to scroll. */
+.viewer-body.media { overflow: hidden; padding: 8px 12px 12px; }
 .viewer-body img, .viewer-body video {
+  display: block;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+.viewer-body audio {
+  width: min(560px, 100%);
 }
 .viewer-body pre {
   color: #e7eaee;
